@@ -178,6 +178,35 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## アプリの公開・共有方法
+
+このアプリを他の人と共有する方法は複数あります：
+
+### 🌐 Streamlit Cloudで公開（推奨）
+
+**ブラウザからアクセスできるWebアプリとして公開できます！**
+
+1. GitHubにプッシュ済みであることを確認
+2. [Streamlit Cloud](https://streamlit.io/cloud)にアクセス
+3. GitHubアカウントでログイン
+4. 「New app」→ リポジトリを選択 → 「Deploy!」
+5. 生成されたURLを共有
+
+詳細は **`DEPLOYMENT_GUIDE.md`** を参照してください。
+
+### 📦 GitHubからクローン
+
+```bash
+git clone https://github.com/fkd-streamlit/realtime-transcription-translation.git
+cd realtime-transcription-translation
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+### 📁 ZIPファイルで共有
+
+プロジェクトフォルダをZIP圧縮して共有。受け取った人は依存関係をインストールして実行。
+
 ## 注意事項
 
 - deep-translatorはGoogle翻訳の非公式APIを使用しています。大量の翻訳リクエストは制限される可能性があります
@@ -185,4 +214,5 @@ streamlit run app.py
 - 音声ファイルのサイズが大きい場合、処理に時間がかかります
 - CPUのみで動作するため、GPUがある場合はより高速に処理できます（faster-whisperはGPUを自動検出します）
 - マイク入力機能はブラウザのマイクアクセス許可が必要です（HTTPS環境で推奨）
+- Streamlit Cloudでは初回起動時にモデルダウンロードに時間がかかります（5-10分程度）
 
