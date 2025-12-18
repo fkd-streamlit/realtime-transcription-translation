@@ -31,8 +31,12 @@ if 'whisper_model' not in st.session_state:
     st.session_state.whisper_model = None
 if 'auto_transcribe' not in st.session_state:
     st.session_state.auto_transcribe = False
+if 'realtime_transcribe' not in st.session_state:
+    st.session_state.realtime_transcribe = False
 if 'last_audio_hash' not in st.session_state:
     st.session_state.last_audio_hash = None
+if 'realtime_subtitles_list' not in st.session_state:
+    st.session_state.realtime_subtitles_list = []
 
 # タイトル
 st.title("🎙️ リアルタイム文字起こしと翻訳アプリ")
@@ -110,8 +114,15 @@ with tab2:
     st.info("💡 マイクの使用許可をブラウザで許可してください")
     
     # 自動文字起こしの設定
-    auto_transcribe = st.checkbox("🎯 録音完了後に自動で文字起こし・翻訳を実行", value=st.session_state.auto_transcribe)
-    st.session_state.auto_transcribe = auto_transcribe
+    col_mode1, col_mode2 = st.columns(2)
+    with col_mode1:
+        auto_transcribe = st.checkbox("🎯 録音完了後に自動で文字起こし・翻訳を実行", value=st.session_state.auto_transcribe)
+        st.session_state.auto_transcribe = auto_transcribe
+    with col_mode2:
+        realtime_transcribe = st.checkbox("⚡ リアルタイム字幕表示（チャンクごとに処理）", value=st.session_state.realtime_transcribe)
+        st.session_state.realtime_transcribe = realtime_transcribe
+        if realtime_transcribe:
+            st.caption("録音を短いチャンクに分割して順次処理し、字幕をリアルタイムで表示します")
     
     # マイク入力
     audio_data = st.audio_input("音声を録音してください", label_visibility="collapsed")
@@ -147,8 +158,146 @@ with tab2:
                 else:
                     st.success("✅ 録音完了！")
                     
+                    # リアルタイム字幕表示モード
+                    if st.session_state.realtime_transcribe:
+                        # リアルタイム字幕表示エリア
+                        subtitle_placeholder = st.empty()
+                        subtitle_container = subtitle_placeholder.container()
+                        
+                        with subtitle_container:
+                            st.markdown("### 📺 リアルタイム字幕（処理中...）")
+                            st.markdown("---")
+                        
+                        # 音声を短いチャンクに分割して処理
+                        try:
+                            # Whisperモデルの読み込み
+                            if st.session_state.whisper_model is None:
+                                with st.spinner("モデルを読み込み中..."):
+                                    st.session_state.whisper_model = WhisperModel(
+                                        model_size,
+                                        device="cpu",
+                                        compute_type=compute_type
+                                    )
+                            
+                            model = st.session_state.whisper_model
+                            
+                            # 音声の長さを取得
+                            import wave
+                            with wave.open(audio_wav_path, 'rb') as wav_file:
+                                frames = wav_file.getnframes()
+                                sample_rate = wav_file.getframerate()
+                                duration = frames / float(sample_rate)
+                            
+                            # チャンクサイズ（秒）
+                            chunk_size = 3.0
+                            all_subtitles = []
+                            detected_lang = None
+                            
+                            # チャンクごとに処理
+                            for chunk_start in range(0, int(duration), int(chunk_size)):
+                                chunk_end = min(chunk_start + chunk_size, duration)
+                                
+                                # チャンクを抽出
+                                chunk_wav_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
+                                cmd_chunk = [
+                                    "ffmpeg", "-y", "-i", audio_wav_path,
+                                    "-ss", str(chunk_start), "-t", str(chunk_size),
+                                    "-ac", "1", "-ar", "16000", chunk_wav_path
+                                ]
+                                subprocess.run(cmd_chunk, capture_output=True, text=True)
+                                
+                                # 文字起こし
+                                try:
+                                    segments, info = model.transcribe(
+                                        chunk_wav_path,
+                                        language=source_lang,
+                                        vad_filter=True
+                                    )
+                                    segments_list = list(segments)
+                                    
+                                    if not detected_lang:
+                                        detected_lang = info.language
+                                    
+                                    # 翻訳
+                                    if segments_list:
+                                        if detected_lang == "ja":
+                                            target_lang = "en"
+                                            source_name = "日本語"
+                                            target_name = "英語"
+                                        else:
+                                            target_lang = "ja"
+                                            source_name = "英語"
+                                            target_name = "日本語"
+                                        
+                                        translator = GoogleTranslator(source=detected_lang, target=target_lang)
+                                        
+                                        for seg in segments_list:
+                                            text = seg.text.strip()
+                                            if not text:
+                                                continue
+                                            
+                                            try:
+                                                translated_text = translator.translate(text)
+                                                subtitle_item = {
+                                                    'start': chunk_start + seg.start,
+                                                    'end': chunk_start + seg.end,
+                                                    'original': text,
+                                                    'translated': translated_text,
+                                                    'source_name': source_name,
+                                                    'target_name': target_name
+                                                }
+                                                all_subtitles.append(subtitle_item)
+                                                
+                                                # リアルタイムで字幕を更新
+                                                with subtitle_container:
+                                                    st.markdown(f"**[{subtitle_item['start']:.1f}s - {subtitle_item['end']:.1f}s]**")
+                                                    st.markdown(f"**{source_name}:** {text}")
+                                                    st.markdown(f"**{target_name}:** {translated_text}")
+                                                    st.markdown("---")
+                                                
+                                                time.sleep(0.1)  # API制限を避ける
+                                            except Exception as e:
+                                                subtitle_item = {
+                                                    'start': chunk_start + seg.start,
+                                                    'end': chunk_start + seg.end,
+                                                    'original': text,
+                                                    'translated': text,
+                                                    'source_name': source_name,
+                                                    'target_name': target_name
+                                                }
+                                                all_subtitles.append(subtitle_item)
+                                
+                                except Exception as e:
+                                    st.warning(f"チャンク {chunk_start:.1f}s-{chunk_end:.1f}s の処理でエラー: {str(e)}")
+                                
+                                finally:
+                                    try:
+                                        os.unlink(chunk_wav_path)
+                                    except:
+                                        pass
+                            
+                            # 最終結果をセッション状態に保存
+                            if all_subtitles:
+                                st.session_state.realtime_subtitles_list = all_subtitles
+                                st.session_state.translated_segments = all_subtitles
+                                st.session_state.segments = [type('obj', (object,), {
+                                    'start': s['start'],
+                                    'end': s['end'],
+                                    'text': s['original']
+                                })() for s in all_subtitles]
+                                st.session_state.detected_language = detected_lang
+                                st.session_state.transcription_done = True
+                                
+                                with subtitle_container:
+                                    st.success(f"✅ リアルタイム字幕処理完了！検出言語: {detected_lang}")
+                            
+                            st.session_state.last_audio_hash = audio_hash
+                            
+                        except Exception as e:
+                            st.error(f"リアルタイム処理エラー: {str(e)}")
+                    
                     # 自動文字起こしが有効な場合、自動実行
-                    if st.session_state.auto_transcribe:
+                    elif st.session_state.auto_transcribe:
                         with st.spinner("🔄 自動で文字起こし・翻訳を実行中..."):
                             try:
                                 # Whisperモデルの読み込み（キャッシュがあれば再利用）
