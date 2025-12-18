@@ -291,8 +291,13 @@ with tab2:
                                                 # 翻訳実行
                                                 translated_text = translator.translate(text)
                                                 
+                                                # デバッグ情報（最初の数個のみ）
+                                                if len(all_subtitles) < 3:
+                                                    st.caption(f"翻訳: '{text[:30]}...' → '{translated_text[:30]}...'")
+                                                
                                                 # 翻訳結果が空でないか確認
                                                 if not translated_text or translated_text.strip() == "":
+                                                    st.warning(f"翻訳結果が空です: {text[:50]}")
                                                     translated_text = text  # 翻訳失敗時は元のテキスト
                                                 
                                                 subtitle_item = {
