@@ -37,6 +37,12 @@ if 'last_audio_hash' not in st.session_state:
     st.session_state.last_audio_hash = None
 if 'realtime_subtitles_list' not in st.session_state:
     st.session_state.realtime_subtitles_list = []
+if 'is_recording' not in st.session_state:
+    st.session_state.is_recording = False
+if 'recording_chunks' not in st.session_state:
+    st.session_state.recording_chunks = []
+if 'processed_chunks' not in st.session_state:
+    st.session_state.processed_chunks = 0
 
 # タイトル
 st.title("🎙️ リアルタイム文字起こしと翻訳アプリ")
@@ -119,10 +125,10 @@ with tab2:
         auto_transcribe = st.checkbox("🎯 録音完了後に自動で文字起こし・翻訳を実行", value=st.session_state.auto_transcribe)
         st.session_state.auto_transcribe = auto_transcribe
     with col_mode2:
-        realtime_transcribe = st.checkbox("⚡ リアルタイム字幕表示（チャンクごとに処理）", value=st.session_state.realtime_transcribe)
+        realtime_transcribe = st.checkbox("⚡ 録音中リアルタイム字幕表示", value=st.session_state.realtime_transcribe)
         st.session_state.realtime_transcribe = realtime_transcribe
         if realtime_transcribe:
-            st.caption("録音を短いチャンクに分割して順次処理し、字幕をリアルタイムで表示します")
+            st.caption("録音完了後、短いチャンクに分割して順次処理し、字幕をリアルタイムで表示します")
     
     # マイク入力
     audio_data = st.audio_input("音声を録音してください", label_visibility="collapsed")
@@ -160,13 +166,12 @@ with tab2:
                     
                     # リアルタイム字幕表示モード
                     if st.session_state.realtime_transcribe:
-                        # リアルタイム字幕表示エリア
-                        subtitle_placeholder = st.empty()
-                        subtitle_container = subtitle_placeholder.container()
+                        # リアルタイム字幕表示エリア（常に表示）
+                        st.markdown("### 📺 リアルタイム字幕（処理中...）")
+                        st.markdown("---")
                         
-                        with subtitle_container:
-                            st.markdown("### 📺 リアルタイム字幕（処理中...）")
-                            st.markdown("---")
+                        # 字幕表示用のコンテナ
+                        subtitle_display = st.container()
                         
                         # 音声を短いチャンクに分割して処理
                         try:
@@ -188,14 +193,25 @@ with tab2:
                                 sample_rate = wav_file.getframerate()
                                 duration = frames / float(sample_rate)
                             
-                            # チャンクサイズ（秒）
-                            chunk_size = 3.0
+                            # チャンクサイズ（秒）- より短くしてリアルタイム感を向上
+                            chunk_size = 2.0
                             all_subtitles = []
                             detected_lang = None
                             
+                            # プログレスバー
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
                             # チャンクごとに処理
-                            for chunk_start in range(0, int(duration), int(chunk_size)):
+                            num_chunks = int(duration / chunk_size) + (1 if duration % chunk_size > 0 else 0)
+                            
+                            for chunk_idx, chunk_start in enumerate(range(0, int(duration), int(chunk_size))):
                                 chunk_end = min(chunk_start + chunk_size, duration)
+                                
+                                # プログレス更新
+                                progress = (chunk_idx + 1) / num_chunks
+                                progress_bar.progress(progress)
+                                status_text.text(f"処理中: {chunk_start:.1f}s - {chunk_end:.1f}s ({chunk_idx + 1}/{num_chunks})")
                                 
                                 # チャンクを抽出
                                 chunk_wav_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
@@ -248,14 +264,14 @@ with tab2:
                                                 }
                                                 all_subtitles.append(subtitle_item)
                                                 
-                                                # リアルタイムで字幕を更新
-                                                with subtitle_container:
+                                                # リアルタイムで字幕を表示（累積的に）
+                                                with subtitle_display:
                                                     st.markdown(f"**[{subtitle_item['start']:.1f}s - {subtitle_item['end']:.1f}s]**")
                                                     st.markdown(f"**{source_name}:** {text}")
                                                     st.markdown(f"**{target_name}:** {translated_text}")
                                                     st.markdown("---")
                                                 
-                                                time.sleep(0.1)  # API制限を避ける
+                                                time.sleep(0.05)  # API制限を避ける（短縮）
                                             except Exception as e:
                                                 subtitle_item = {
                                                     'start': chunk_start + seg.start,
@@ -266,6 +282,13 @@ with tab2:
                                                     'target_name': target_name
                                                 }
                                                 all_subtitles.append(subtitle_item)
+                                                
+                                                # エラー時も字幕を表示
+                                                with subtitle_display:
+                                                    st.markdown(f"**[{subtitle_item['start']:.1f}s - {subtitle_item['end']:.1f}s]**")
+                                                    st.markdown(f"**{source_name}:** {text}")
+                                                    st.markdown(f"**{target_name}:** {text} (翻訳エラー)")
+                                                    st.markdown("---")
                                 
                                 except Exception as e:
                                     st.warning(f"チャンク {chunk_start:.1f}s-{chunk_end:.1f}s の処理でエラー: {str(e)}")
@@ -275,6 +298,10 @@ with tab2:
                                         os.unlink(chunk_wav_path)
                                     except:
                                         pass
+                            
+                            # プログレスバーをクリア
+                            progress_bar.empty()
+                            status_text.empty()
                             
                             # 最終結果をセッション状態に保存
                             if all_subtitles:
@@ -288,8 +315,7 @@ with tab2:
                                 st.session_state.detected_language = detected_lang
                                 st.session_state.transcription_done = True
                                 
-                                with subtitle_container:
-                                    st.success(f"✅ リアルタイム字幕処理完了！検出言語: {detected_lang}")
+                                st.success(f"✅ リアルタイム字幕処理完了！検出言語: {detected_lang} | 合計 {len(all_subtitles)} セグメント")
                             
                             st.session_state.last_audio_hash = audio_hash
                             
