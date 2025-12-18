@@ -1,0 +1,423 @@
+import streamlit as st
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+from faster_whisper import WhisperModel
+from deep_translator import GoogleTranslator
+import time
+from datetime import datetime
+import json
+
+# ページ設定
+st.set_page_config(
+    page_title="リアルタイム文字起こしと翻訳",
+    page_icon="🎙️",
+    layout="wide"
+)
+
+# セッション状態の初期化
+if 'transcription_done' not in st.session_state:
+    st.session_state.transcription_done = False
+if 'segments' not in st.session_state:
+    st.session_state.segments = []
+if 'translated_segments' not in st.session_state:
+    st.session_state.translated_segments = []
+if 'realtime_mode' not in st.session_state:
+    st.session_state.realtime_mode = False
+if 'realtime_subtitles' not in st.session_state:
+    st.session_state.realtime_subtitles = []
+if 'whisper_model' not in st.session_state:
+    st.session_state.whisper_model = None
+
+# タイトル
+st.title("🎙️ リアルタイム文字起こしと翻訳アプリ")
+st.markdown("---")
+
+# サイドバー：設定
+with st.sidebar:
+    st.header("⚙️ 設定")
+    
+    model_size = st.selectbox(
+        "Whisperモデルサイズ",
+        ["tiny", "base", "small", "medium", "large"],
+        index=2,
+        help="大きいほど精度が高いですが、処理が遅くなります"
+    )
+    
+    compute_type = st.selectbox(
+        "計算タイプ",
+        ["int8", "float16", "float32"],
+        index=0,
+        help="int8が最も高速ですが、精度はやや低いです"
+    )
+    
+    display_interval = st.slider(
+        "字幕表示間隔（秒）",
+        min_value=1,
+        max_value=10,
+        value=3,
+        help="字幕を更新する間隔"
+    )
+    
+    st.markdown("---")
+    st.markdown("### 📝 使い方")
+    st.markdown("""
+    **ファイルアップロード:**
+    1. 音声ファイルをアップロード
+    2. 「文字起こし開始」ボタンをクリック
+    3. 字幕が表示されます
+    
+    **マイク入力:**
+    1. 「マイクから録音」タブを選択
+    2. 録音ボタンをクリック
+    3. リアルタイムで文字起こし・翻訳
+    """)
+
+# タブでファイルアップロードとマイク入力を切り替え
+tab1, tab2 = st.tabs(["📁 ファイルアップロード", "🎤 マイクから録音"])
+
+with tab1:
+    # メインエリア
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.header("📁 音声ファイルのアップロード")
+        uploaded_file = st.file_uploader(
+            "音声ファイルを選択してください",
+            type=['wav', 'mp3', 'm4a', 'flac', 'ogg', 'webm'],
+            help="対応形式: WAV, MP3, M4A, FLAC, OGG, WEBM"
+        )
+
+    with col2:
+        st.header("🎯 言語検出")
+        auto_detect = st.checkbox("自動検出", value=True)
+        if not auto_detect:
+            source_lang = st.selectbox(
+                "音声の言語",
+                ["ja", "en"],
+                format_func=lambda x: "日本語" if x == "ja" else "英語"
+            )
+        else:
+            source_lang = None
+
+with tab2:
+    st.header("🎤 マイクからリアルタイム録音")
+    st.info("💡 マイクの使用許可をブラウザで許可してください")
+    
+    # マイク入力
+    audio_data = st.audio_input("音声を録音してください", label_visibility="collapsed")
+    
+    if audio_data is not None:
+        # 録音された音声を一時ファイルに保存
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_audio:
+            tmp_audio.write(audio_data.read())
+            mic_audio_path = tmp_audio.name
+        
+        # 16kHz mono WAVに変換
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_wav:
+            audio_wav_path = tmp_wav.name
+        
+        try:
+            # ffmpegで変換
+            cmd = [
+                "ffmpeg", "-y", "-i", mic_audio_path,
+                "-ac", "1", "-ar", "16000", audio_wav_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                st.error(f"音声変換エラー: {result.stderr}")
+            else:
+                st.success("✅ 録音完了！文字起こしを実行しますか？")
+                
+                col_btn1, col_btn2 = st.columns(2)
+                
+                with col_btn1:
+                    if st.button("🚀 文字起こし開始", type="primary", use_container_width=True):
+                        with st.spinner("文字起こしを実行中..."):
+                            try:
+                                # Whisperモデルの読み込み（キャッシュがあれば再利用）
+                                if st.session_state.whisper_model is None:
+                                    st.session_state.whisper_model = WhisperModel(
+                                        model_size,
+                                        device="cpu",
+                                        compute_type=compute_type
+                                    )
+                                
+                                model = st.session_state.whisper_model
+                                
+                                # 文字起こし実行
+                                segments, info = model.transcribe(
+                                    audio_wav_path,
+                                    language=source_lang,
+                                    vad_filter=True
+                                )
+                                
+                                segments_list = list(segments)
+                                st.session_state.segments = segments_list
+                                st.session_state.detected_language = info.language
+                                st.session_state.transcription_done = True
+                                
+                                st.success(f"✅ 文字起こし完了！検出言語: {info.language}")
+                                st.rerun()
+                                
+                            except Exception as e:
+                                st.error(f"文字起こしエラー: {str(e)}")
+                
+                with col_btn2:
+                    if st.button("🔄 再録音", use_container_width=True):
+                        st.session_state.transcription_done = False
+                        st.rerun()
+                
+                # 録音された音声を再生
+                st.audio(audio_data, format="audio/wav")
+        
+        except Exception as e:
+            st.error(f"エラー: {str(e)}")
+        finally:
+            # 一時ファイルのクリーンアップ
+            try:
+                os.unlink(mic_audio_path)
+            except:
+                pass
+
+# ファイルアップロードの文字起こし処理
+if uploaded_file is not None:
+    # 一時ファイルに保存
+    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        tmp_audio_path = tmp_file.name
+    
+    # 16kHz mono WAVに変換
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_wav:
+        audio_wav_path = tmp_wav.name
+    
+    try:
+        # ffmpegで変換
+        cmd = [
+            "ffmpeg", "-y", "-i", tmp_audio_path,
+            "-ac", "1", "-ar", "16000", audio_wav_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            st.error(f"音声変換エラー: {result.stderr}")
+        else:
+            st.success("✅ 音声ファイルの準備が完了しました")
+            
+            if st.button("🚀 文字起こし開始", type="primary", use_container_width=True):
+                with st.spinner("文字起こしを実行中..."):
+                    try:
+                        # Whisperモデルの読み込み（キャッシュがあれば再利用）
+                        if st.session_state.whisper_model is None:
+                            st.session_state.whisper_model = WhisperModel(
+                                model_size,
+                                device="cpu",
+                                compute_type=compute_type
+                            )
+                        model = st.session_state.whisper_model
+                        
+                        # 文字起こし実行
+                        segments, info = model.transcribe(
+                            audio_wav_path,
+                            language=source_lang,
+                            vad_filter=True
+                        )
+                        
+                        segments_list = list(segments)
+                        st.session_state.segments = segments_list
+                        st.session_state.detected_language = info.language
+                        st.session_state.transcription_done = True
+                        
+                        st.success(f"✅ 文字起こし完了！検出言語: {info.language}")
+                        
+                    except Exception as e:
+                        st.error(f"文字起こしエラー: {str(e)}")
+    
+    except Exception as e:
+        st.error(f"エラー: {str(e)}")
+    finally:
+        # 一時ファイルのクリーンアップ
+        try:
+            os.unlink(tmp_audio_path)
+        except:
+            pass
+
+# 字幕表示と翻訳
+if st.session_state.transcription_done and st.session_state.segments:
+    st.markdown("---")
+    st.header("📺 字幕表示")
+    
+    # 翻訳の設定
+    detected_lang = st.session_state.detected_language
+    if detected_lang == "ja":
+        target_lang = "en"
+        source_name = "日本語"
+        target_name = "英語"
+    else:
+        target_lang = "ja"
+        source_name = "英語"
+        target_name = "日本語"
+    
+    st.info(f"🔍 検出された言語: {source_name} → 翻訳先: {target_name}")
+    
+    # 翻訳実行
+    if st.button("🌐 翻訳を実行", use_container_width=True):
+        translator = GoogleTranslator(source=detected_lang, target=target_lang)
+        translated = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, seg in enumerate(st.session_state.segments):
+            text = seg.text.strip()
+            if not text:
+                continue
+            
+            try:
+                # 翻訳実行
+                translated_text = translator.translate(text)
+                translated.append({
+                    'start': seg.start,
+                    'end': seg.end,
+                    'original': text,
+                    'translated': translated_text
+                })
+                
+                progress_bar.progress((i + 1) / len(st.session_state.segments))
+                status_text.text(f"翻訳中: {i + 1}/{len(st.session_state.segments)}")
+                
+                # API制限を避けるため、少し待機
+                time.sleep(0.1)
+                
+            except Exception as e:
+                st.warning(f"翻訳エラー（セグメント {i+1}）: {str(e)}")
+                translated.append({
+                    'start': seg.start,
+                    'end': seg.end,
+                    'original': text,
+                    'translated': text  # エラー時は元のテキスト
+                })
+        
+        st.session_state.translated_segments = translated
+        progress_bar.empty()
+        status_text.empty()
+        st.success("✅ 翻訳完了！")
+    
+    # 字幕表示エリア
+    if st.session_state.translated_segments:
+        st.markdown("### 🎬 リアルタイム字幕プレビュー")
+        
+        # 字幕表示用のコンテナ
+        subtitle_container = st.container()
+        
+        # 再生位置（秒）
+        current_time = st.slider(
+            "再生位置（秒）",
+            min_value=0.0,
+            max_value=float(st.session_state.segments[-1].end) if st.session_state.segments else 100.0,
+            value=0.0,
+            step=0.1
+        )
+        
+        # 現在の字幕を表示
+        current_subtitle = None
+        for item in st.session_state.translated_segments:
+            if item['start'] <= current_time <= item['end']:
+                current_subtitle = item
+                break
+        
+        if current_subtitle:
+            subtitle_container.markdown("---")
+            subtitle_container.markdown(f"### 🎯 現在の字幕")
+            subtitle_container.markdown(f"**{source_name}:** {current_subtitle['original']}")
+            subtitle_container.markdown(f"**{target_name}:** {current_subtitle['translated']}")
+            subtitle_container.markdown(f"*時間: {current_subtitle['start']:.1f}s - {current_subtitle['end']:.1f}s*")
+        
+        # 全字幕リスト
+        with st.expander("📋 全字幕リストを表示"):
+            for i, item in enumerate(st.session_state.translated_segments, 1):
+                st.markdown(f"**{i}. [{item['start']:.1f}s - {item['end']:.1f}s]**")
+                st.markdown(f"- {source_name}: {item['original']}")
+                st.markdown(f"- {target_name}: {item['translated']}")
+                st.markdown("---")
+        
+        # SRTファイル生成
+        st.markdown("---")
+        st.header("💾 字幕ファイルのダウンロード")
+        
+        def generate_srt(segments_data, include_translation=True):
+            """SRTファイルを生成"""
+            srt_content = ""
+            idx = 1
+            
+            for item in segments_data:
+                if not item['original'].strip():
+                    continue
+                
+                # 時間フォーマット変換
+                def srt_time(sec):
+                    h = int(sec // 3600)
+                    m = int((sec % 3600) // 60)
+                    s = int(sec % 60)
+                    ms = int((sec - int(sec)) * 1000)
+                    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+                
+                start_time = srt_time(item['start'])
+                end_time = srt_time(item['end'])
+                
+                # 字幕テキスト
+                if include_translation:
+                    subtitle_text = f"{item['original']}\n{item['translated']}"
+                else:
+                    subtitle_text = item['original']
+                
+                srt_content += f"{idx}\n{start_time} --> {end_time}\n{subtitle_text}\n\n"
+                idx += 1
+            
+            return srt_content
+        
+        col_dl1, col_dl2 = st.columns(2)
+        
+        with col_dl1:
+            # 翻訳付きSRT
+            srt_with_translation = generate_srt(st.session_state.translated_segments, include_translation=True)
+            st.download_button(
+                label="📥 翻訳付きSRTをダウンロード",
+                data=srt_with_translation,
+                file_name="subtitles_with_translation.srt",
+                mime="text/plain",
+                use_container_width=True
+            )
+        
+        with col_dl2:
+            # 元の言語のみSRT
+            srt_original = generate_srt(st.session_state.translated_segments, include_translation=False)
+            st.download_button(
+                label="📥 元の言語のみSRTをダウンロード",
+                data=srt_original,
+                file_name="subtitles_original.srt",
+                mime="text/plain",
+                use_container_width=True
+            )
+        
+        # JSON形式でもダウンロード可能
+        json_data = json.dumps(st.session_state.translated_segments, ensure_ascii=False, indent=2)
+        st.download_button(
+            label="📥 JSON形式でダウンロード",
+            data=json_data,
+            file_name="subtitles.json",
+            mime="application/json",
+            use_container_width=True
+        )
+
+# フッター
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: gray;'>
+    <p>リアルタイム文字起こしと翻訳アプリ | faster-whisper + deep-translator</p>
+    <p>アカウント不要・課金不要</p>
+</div>
+""", unsafe_allow_html=True)
+
