@@ -113,8 +113,19 @@ with tab1:
         if not auto_detect:
             source_lang = st.selectbox(
                 "音声の言語",
-                ["ja", "en"],
-                format_func=lambda x: "日本語" if x == "ja" else "英語"
+                ["ja", "en", "zh", "ko", "es", "fr", "de", "it", "pt", "ru"],
+                format_func=lambda x: {
+                    "ja": "日本語",
+                    "en": "英語",
+                    "zh": "中国語",
+                    "ko": "韓国語",
+                    "es": "スペイン語",
+                    "fr": "フランス語",
+                    "de": "ドイツ語",
+                    "it": "イタリア語",
+                    "pt": "ポルトガル語",
+                    "ru": "ロシア語"
+                }.get(x, x)
             )
         else:
             source_lang = None
@@ -265,6 +276,19 @@ with tab2:
                                     # 翻訳
                                     if segments_list:
                                         # 言語に応じて翻訳先を決定
+                                        lang_names = {
+                                            "ja": "日本語",
+                                            "en": "英語",
+                                            "zh": "中国語",
+                                            "ko": "韓国語",
+                                            "es": "スペイン語",
+                                            "fr": "フランス語",
+                                            "de": "ドイツ語",
+                                            "it": "イタリア語",
+                                            "pt": "ポルトガル語",
+                                            "ru": "ロシア語"
+                                        }
+                                        
                                         if detected_lang == "ja":
                                             target_lang = "en"
                                             source_name = "日本語"
@@ -273,10 +297,15 @@ with tab2:
                                             target_lang = "ja"
                                             source_name = "英語"
                                             target_name = "日本語"
+                                        elif detected_lang in ["zh", "ko"]:
+                                            # 中国語・韓国語は日本語と英語の両方に翻訳
+                                            target_lang = "ja"
+                                            source_name = lang_names.get(detected_lang, detected_lang.upper())
+                                            target_name = "日本語"
                                         else:
                                             # その他の言語は英語に翻訳
                                             target_lang = "en"
-                                            source_name = detected_lang.upper()
+                                            source_name = lang_names.get(detected_lang, detected_lang.upper())
                                             target_name = "英語"
                                         
                                         # 翻訳器を初期化（各チャンクで再初期化）
@@ -411,6 +440,19 @@ with tab2:
                                 # 自動翻訳も実行
                                 if segments_list:
                                     detected_lang = info.language
+                                    lang_names = {
+                                        "ja": "日本語",
+                                        "en": "英語",
+                                        "zh": "中国語",
+                                        "ko": "韓国語",
+                                        "es": "スペイン語",
+                                        "fr": "フランス語",
+                                        "de": "ドイツ語",
+                                        "it": "イタリア語",
+                                        "pt": "ポルトガル語",
+                                        "ru": "ロシア語"
+                                    }
+                                    
                                     if detected_lang == "ja":
                                         target_lang = "en"
                                         source_name = "日本語"
@@ -419,10 +461,15 @@ with tab2:
                                         target_lang = "ja"
                                         source_name = "英語"
                                         target_name = "日本語"
+                                    elif detected_lang in ["zh", "ko"]:
+                                        # 中国語・韓国語は日本語に翻訳
+                                        target_lang = "ja"
+                                        source_name = lang_names.get(detected_lang, detected_lang.upper())
+                                        target_name = "日本語"
                                     else:
                                         # その他の言語は英語に翻訳
                                         target_lang = "en"
-                                        source_name = detected_lang.upper()
+                                        source_name = lang_names.get(detected_lang, detected_lang.upper())
                                         target_name = "英語"
                                     
                                     translator = GoogleTranslator(source=detected_lang, target=target_lang)
@@ -588,6 +635,19 @@ if st.session_state.transcription_done and st.session_state.segments:
     
     # 翻訳の設定
     detected_lang = st.session_state.detected_language
+    lang_names = {
+        "ja": "日本語",
+        "en": "英語",
+        "zh": "中国語",
+        "ko": "韓国語",
+        "es": "スペイン語",
+        "fr": "フランス語",
+        "de": "ドイツ語",
+        "it": "イタリア語",
+        "pt": "ポルトガル語",
+        "ru": "ロシア語"
+    }
+    
     if detected_lang == "ja":
         target_lang = "en"
         source_name = "日本語"
@@ -596,10 +656,15 @@ if st.session_state.transcription_done and st.session_state.segments:
         target_lang = "ja"
         source_name = "英語"
         target_name = "日本語"
+    elif detected_lang in ["zh", "ko"]:
+        # 中国語・韓国語は日本語に翻訳
+        target_lang = "ja"
+        source_name = lang_names.get(detected_lang, detected_lang.upper())
+        target_name = "日本語"
     else:
         # その他の言語は英語に翻訳
         target_lang = "en"
-        source_name = detected_lang.upper()
+        source_name = lang_names.get(detected_lang, detected_lang.upper())
         target_name = "英語"
     
     st.info(f"🔍 検出された言語: {source_name} → 翻訳先: {target_name}")
