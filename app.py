@@ -29,6 +29,10 @@ if 'realtime_subtitles' not in st.session_state:
     st.session_state.realtime_subtitles = []
 if 'whisper_model' not in st.session_state:
     st.session_state.whisper_model = None
+if 'auto_transcribe' not in st.session_state:
+    st.session_state.auto_transcribe = False
+if 'last_audio_hash' not in st.session_state:
+    st.session_state.last_audio_hash = None
 
 # タイトル
 st.title("🎙️ リアルタイム文字起こしと翻訳アプリ")
@@ -105,37 +109,47 @@ with tab2:
     st.header("🎤 マイクからリアルタイム録音")
     st.info("💡 マイクの使用許可をブラウザで許可してください")
     
+    # 自動文字起こしの設定
+    auto_transcribe = st.checkbox("🎯 録音完了後に自動で文字起こし・翻訳を実行", value=st.session_state.auto_transcribe)
+    st.session_state.auto_transcribe = auto_transcribe
+    
     # マイク入力
     audio_data = st.audio_input("音声を録音してください", label_visibility="collapsed")
     
     if audio_data is not None:
-        # 録音された音声を一時ファイルに保存
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_audio:
-            tmp_audio.write(audio_data.read())
-            mic_audio_path = tmp_audio.name
+        # 音声データのハッシュを計算（同じ音声の重複処理を防ぐ）
+        import hashlib
+        audio_bytes = audio_data.read()
+        audio_hash = hashlib.md5(audio_bytes).hexdigest()
+        audio_data.seek(0)  # ポインタをリセット
         
-        # 16kHz mono WAVに変換
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_wav:
-            audio_wav_path = tmp_wav.name
-        
-        try:
-            # ffmpegで変換
-            cmd = [
-                "ffmpeg", "-y", "-i", mic_audio_path,
-                "-ac", "1", "-ar", "16000", audio_wav_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+        # 新しい音声の場合のみ処理
+        if st.session_state.last_audio_hash != audio_hash:
+            # 録音された音声を一時ファイルに保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_audio:
+                tmp_audio.write(audio_data.read())
+                mic_audio_path = tmp_audio.name
             
-            if result.returncode != 0:
-                st.error(f"音声変換エラー: {result.stderr}")
-            else:
-                st.success("✅ 録音完了！文字起こしを実行しますか？")
+            # 16kHz mono WAVに変換
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_wav:
+                audio_wav_path = tmp_wav.name
+            
+            try:
+                # ffmpegで変換
+                cmd = [
+                    "ffmpeg", "-y", "-i", mic_audio_path,
+                    "-ac", "1", "-ar", "16000", audio_wav_path
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True)
                 
-                col_btn1, col_btn2 = st.columns(2)
-                
-                with col_btn1:
-                    if st.button("🚀 文字起こし開始", type="primary", use_container_width=True):
-                        with st.spinner("文字起こしを実行中..."):
+                if result.returncode != 0:
+                    st.error(f"音声変換エラー: {result.stderr}")
+                else:
+                    st.success("✅ 録音完了！")
+                    
+                    # 自動文字起こしが有効な場合、自動実行
+                    if st.session_state.auto_transcribe:
+                        with st.spinner("🔄 自動で文字起こし・翻訳を実行中..."):
                             try:
                                 # Whisperモデルの読み込み（キャッシュがあれば再利用）
                                 if st.session_state.whisper_model is None:
@@ -159,28 +173,103 @@ with tab2:
                                 st.session_state.detected_language = info.language
                                 st.session_state.transcription_done = True
                                 
-                                st.success(f"✅ 文字起こし完了！検出言語: {info.language}")
+                                # 自動翻訳も実行
+                                if segments_list:
+                                    detected_lang = info.language
+                                    if detected_lang == "ja":
+                                        target_lang = "en"
+                                    else:
+                                        target_lang = "ja"
+                                    
+                                    translator = GoogleTranslator(source=detected_lang, target=target_lang)
+                                    translated = []
+                                    
+                                    for seg in segments_list:
+                                        text = seg.text.strip()
+                                        if not text:
+                                            continue
+                                        try:
+                                            translated_text = translator.translate(text)
+                                            translated.append({
+                                                'start': seg.start,
+                                                'end': seg.end,
+                                                'original': text,
+                                                'translated': translated_text
+                                            })
+                                            time.sleep(0.1)  # API制限を避ける
+                                        except:
+                                            translated.append({
+                                                'start': seg.start,
+                                                'end': seg.end,
+                                                'original': text,
+                                                'translated': text
+                                            })
+                                    
+                                    st.session_state.translated_segments = translated
+                                
+                                st.session_state.last_audio_hash = audio_hash
+                                st.success(f"✅ 文字起こし・翻訳完了！検出言語: {info.language}")
                                 st.rerun()
                                 
                             except Exception as e:
                                 st.error(f"文字起こしエラー: {str(e)}")
+                    else:
+                        # 手動実行モード
+                        col_btn1, col_btn2 = st.columns(2)
+                        
+                        with col_btn1:
+                            if st.button("🚀 文字起こし開始", type="primary", use_container_width=True):
+                                with st.spinner("文字起こしを実行中..."):
+                                    try:
+                                        # Whisperモデルの読み込み（キャッシュがあれば再利用）
+                                        if st.session_state.whisper_model is None:
+                                            st.session_state.whisper_model = WhisperModel(
+                                                model_size,
+                                                device="cpu",
+                                                compute_type=compute_type
+                                            )
+                                        
+                                        model = st.session_state.whisper_model
+                                        
+                                        # 文字起こし実行
+                                        segments, info = model.transcribe(
+                                            audio_wav_path,
+                                            language=source_lang,
+                                            vad_filter=True
+                                        )
+                                        
+                                        segments_list = list(segments)
+                                        st.session_state.segments = segments_list
+                                        st.session_state.detected_language = info.language
+                                        st.session_state.transcription_done = True
+                                        st.session_state.last_audio_hash = audio_hash
+                                        
+                                        st.success(f"✅ 文字起こし完了！検出言語: {info.language}")
+                                        st.rerun()
+                                        
+                                    except Exception as e:
+                                        st.error(f"文字起こしエラー: {str(e)}")
+                        
+                        with col_btn2:
+                            if st.button("🔄 再録音", use_container_width=True):
+                                st.session_state.transcription_done = False
+                                st.session_state.last_audio_hash = None
+                                st.rerun()
+                    
+                    # 録音された音声を再生
+                    st.audio(audio_data, format="audio/wav")
                 
-                with col_btn2:
-                    if st.button("🔄 再録音", use_container_width=True):
-                        st.session_state.transcription_done = False
-                        st.rerun()
-                
-                # 録音された音声を再生
-                st.audio(audio_data, format="audio/wav")
-        
-        except Exception as e:
-            st.error(f"エラー: {str(e)}")
-        finally:
-            # 一時ファイルのクリーンアップ
-            try:
-                os.unlink(mic_audio_path)
-            except:
-                pass
+                # ハッシュを更新
+                st.session_state.last_audio_hash = audio_hash
+            
+            except Exception as e:
+                st.error(f"エラー: {str(e)}")
+            finally:
+                # 一時ファイルのクリーンアップ
+                try:
+                    os.unlink(mic_audio_path)
+                except:
+                    pass
 
 # ファイルアップロードの文字起こし処理
 if uploaded_file is not None:
