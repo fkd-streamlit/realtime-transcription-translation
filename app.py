@@ -43,6 +43,10 @@ if 'recording_chunks' not in st.session_state:
     st.session_state.recording_chunks = []
 if 'processed_chunks' not in st.session_state:
     st.session_state.processed_chunks = 0
+if 'is_processing' not in st.session_state:
+    st.session_state.is_processing = False
+if 'stop_processing' not in st.session_state:
+    st.session_state.stop_processing = False
 
 # タイトル
 st.title("🎙️ リアルタイム文字起こしと翻訳アプリ")
@@ -130,8 +134,27 @@ with tab2:
         if realtime_transcribe:
             st.caption("録音完了後、短いチャンクに分割して順次処理し、字幕をリアルタイムで表示します")
     
+    # リアルタイム字幕表示モードの場合、字幕エリアを事前に表示
+    if st.session_state.realtime_transcribe:
+        st.markdown("### 📺 リアルタイム字幕")
+        st.markdown("---")
+        subtitle_display_realtime = st.empty()
+        
+        # 停止ボタン
+        if st.session_state.is_processing:
+            if st.button("⏹️ 字幕処理を停止", type="secondary", use_container_width=True):
+                st.session_state.stop_processing = True
+                st.session_state.is_processing = False
+                st.rerun()
+    
     # マイク入力
     audio_data = st.audio_input("音声を録音してください", label_visibility="collapsed")
+    
+    # 録音が検知された瞬間に処理開始フラグを設定
+    if audio_data is not None and st.session_state.realtime_transcribe:
+        if not st.session_state.is_processing:
+            st.session_state.is_processing = True
+            st.session_state.stop_processing = False
     
     if audio_data is not None:
         # 音声データのハッシュを計算（同じ音声の重複処理を防ぐ）
@@ -165,13 +188,10 @@ with tab2:
                     st.success("✅ 録音完了！")
                     
                     # リアルタイム字幕表示モード
-                    if st.session_state.realtime_transcribe:
-                        # リアルタイム字幕表示エリア（常に表示）
-                        st.markdown("### 📺 リアルタイム字幕（処理中...）")
-                        st.markdown("---")
-                        
-                        # 字幕表示用のコンテナ
-                        subtitle_display = st.container()
+                    if st.session_state.realtime_transcribe and not st.session_state.stop_processing:
+                        # 処理開始を表示
+                        with subtitle_display_realtime.container():
+                            st.info("🔄 録音完了！字幕処理を開始します...")
                         
                         # 音声を短いチャンクに分割して処理
                         try:
@@ -205,7 +225,15 @@ with tab2:
                             # チャンクごとに処理
                             num_chunks = int(duration / chunk_size) + (1 if duration % chunk_size > 0 else 0)
                             
+                            # 字幕をクリア
+                            all_subtitles_display = []
+                            
                             for chunk_idx, chunk_start in enumerate(range(0, int(duration), int(chunk_size))):
+                                # 停止フラグをチェック
+                                if st.session_state.stop_processing:
+                                    st.warning("⏹️ 字幕処理が停止されました")
+                                    break
+                                
                                 chunk_end = min(chunk_start + chunk_size, duration)
                                 
                                 # プログレス更新
@@ -263,13 +291,15 @@ with tab2:
                                                     'target_name': target_name
                                                 }
                                                 all_subtitles.append(subtitle_item)
+                                                all_subtitles_display.append(subtitle_item)
                                                 
                                                 # リアルタイムで字幕を表示（累積的に）
-                                                with subtitle_display:
-                                                    st.markdown(f"**[{subtitle_item['start']:.1f}s - {subtitle_item['end']:.1f}s]**")
-                                                    st.markdown(f"**{source_name}:** {text}")
-                                                    st.markdown(f"**{target_name}:** {translated_text}")
-                                                    st.markdown("---")
+                                                with subtitle_display_realtime.container():
+                                                    for sub in all_subtitles_display:
+                                                        st.markdown(f"**[{sub['start']:.1f}s - {sub['end']:.1f}s]**")
+                                                        st.markdown(f"**{sub['source_name']}:** {sub['original']}")
+                                                        st.markdown(f"**{sub['target_name']}:** {sub['translated']}")
+                                                        st.markdown("---")
                                                 
                                                 time.sleep(0.05)  # API制限を避ける（短縮）
                                             except Exception as e:
@@ -282,13 +312,18 @@ with tab2:
                                                     'target_name': target_name
                                                 }
                                                 all_subtitles.append(subtitle_item)
+                                                all_subtitles_display.append(subtitle_item)
                                                 
                                                 # エラー時も字幕を表示
-                                                with subtitle_display:
-                                                    st.markdown(f"**[{subtitle_item['start']:.1f}s - {subtitle_item['end']:.1f}s]**")
-                                                    st.markdown(f"**{source_name}:** {text}")
-                                                    st.markdown(f"**{target_name}:** {text} (翻訳エラー)")
-                                                    st.markdown("---")
+                                                with subtitle_display_realtime.container():
+                                                    for sub in all_subtitles_display:
+                                                        st.markdown(f"**[{sub['start']:.1f}s - {sub['end']:.1f}s]**")
+                                                        st.markdown(f"**{sub['source_name']}:** {sub['original']}")
+                                                        if sub['translated'] == sub['original']:
+                                                            st.markdown(f"**{sub['target_name']}:** {sub['translated']} (翻訳エラー)")
+                                                        else:
+                                                            st.markdown(f"**{sub['target_name']}:** {sub['translated']}")
+                                                        st.markdown("---")
                                 
                                 except Exception as e:
                                     st.warning(f"チャンク {chunk_start:.1f}s-{chunk_end:.1f}s の処理でエラー: {str(e)}")
@@ -303,6 +338,9 @@ with tab2:
                             progress_bar.empty()
                             status_text.empty()
                             
+                            # 処理完了
+                            st.session_state.is_processing = False
+                            
                             # 最終結果をセッション状態に保存
                             if all_subtitles:
                                 st.session_state.realtime_subtitles_list = all_subtitles
@@ -315,11 +353,13 @@ with tab2:
                                 st.session_state.detected_language = detected_lang
                                 st.session_state.transcription_done = True
                                 
-                                st.success(f"✅ リアルタイム字幕処理完了！検出言語: {detected_lang} | 合計 {len(all_subtitles)} セグメント")
+                                with subtitle_display_realtime.container():
+                                    st.success(f"✅ リアルタイム字幕処理完了！検出言語: {detected_lang} | 合計 {len(all_subtitles)} セグメント")
                             
                             st.session_state.last_audio_hash = audio_hash
                             
                         except Exception as e:
+                            st.session_state.is_processing = False
                             st.error(f"リアルタイム処理エラー: {str(e)}")
                     
                     # 自動文字起こしが有効な場合、自動実行
