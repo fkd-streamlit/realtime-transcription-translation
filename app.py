@@ -264,15 +264,22 @@ with tab2:
                                     
                                     # 翻訳
                                     if segments_list:
+                                        # 言語に応じて翻訳先を決定
                                         if detected_lang == "ja":
                                             target_lang = "en"
                                             source_name = "日本語"
                                             target_name = "英語"
-                                        else:
+                                        elif detected_lang == "en":
                                             target_lang = "ja"
                                             source_name = "英語"
                                             target_name = "日本語"
+                                        else:
+                                            # その他の言語は英語に翻訳
+                                            target_lang = "en"
+                                            source_name = detected_lang.upper()
+                                            target_name = "英語"
                                         
+                                        # 翻訳器を初期化（各チャンクで再初期化）
                                         translator = GoogleTranslator(source=detected_lang, target=target_lang)
                                         
                                         for seg in segments_list:
@@ -281,7 +288,13 @@ with tab2:
                                                 continue
                                             
                                             try:
+                                                # 翻訳実行
                                                 translated_text = translator.translate(text)
+                                                
+                                                # 翻訳結果が空でないか確認
+                                                if not translated_text or translated_text.strip() == "":
+                                                    translated_text = text  # 翻訳失敗時は元のテキスト
+                                                
                                                 subtitle_item = {
                                                     'start': chunk_start + seg.start,
                                                     'end': chunk_start + seg.end,
@@ -303,11 +316,13 @@ with tab2:
                                                 
                                                 time.sleep(0.05)  # API制限を避ける（短縮）
                                             except Exception as e:
+                                                # エラー時は元のテキストを表示
+                                                st.warning(f"翻訳エラー: {str(e)} | テキスト: {text[:50]}")
                                                 subtitle_item = {
                                                     'start': chunk_start + seg.start,
                                                     'end': chunk_start + seg.end,
                                                     'original': text,
-                                                    'translated': text,
+                                                    'translated': text,  # エラー時は元のテキスト
                                                     'source_name': source_name,
                                                     'target_name': target_name
                                                 }
@@ -319,8 +334,8 @@ with tab2:
                                                     for sub in all_subtitles_display:
                                                         st.markdown(f"**[{sub['start']:.1f}s - {sub['end']:.1f}s]**")
                                                         st.markdown(f"**{sub['source_name']}:** {sub['original']}")
-                                                        if sub['translated'] == sub['original']:
-                                                            st.markdown(f"**{sub['target_name']}:** {sub['translated']} (翻訳エラー)")
+                                                        if sub['translated'] == sub['original'] and sub['original']:
+                                                            st.markdown(f"**{sub['target_name']}:** {sub['translated']} ⚠️ (翻訳エラー)")
                                                         else:
                                                             st.markdown(f"**{sub['target_name']}:** {sub['translated']}")
                                                         st.markdown("---")
@@ -393,8 +408,17 @@ with tab2:
                                     detected_lang = info.language
                                     if detected_lang == "ja":
                                         target_lang = "en"
-                                    else:
+                                        source_name = "日本語"
+                                        target_name = "英語"
+                                    elif detected_lang == "en":
                                         target_lang = "ja"
+                                        source_name = "英語"
+                                        target_name = "日本語"
+                                    else:
+                                        # その他の言語は英語に翻訳
+                                        target_lang = "en"
+                                        source_name = detected_lang.upper()
+                                        target_name = "英語"
                                     
                                     translator = GoogleTranslator(source=detected_lang, target=target_lang)
                                     translated = []
@@ -405,6 +429,9 @@ with tab2:
                                             continue
                                         try:
                                             translated_text = translator.translate(text)
+                                            # 翻訳結果が空でないか確認
+                                            if not translated_text or translated_text.strip() == "":
+                                                translated_text = text
                                             translated.append({
                                                 'start': seg.start,
                                                 'end': seg.end,
@@ -412,7 +439,8 @@ with tab2:
                                                 'translated': translated_text
                                             })
                                             time.sleep(0.1)  # API制限を避ける
-                                        except:
+                                        except Exception as e:
+                                            st.warning(f"翻訳エラー: {str(e)} | テキスト: {text[:50]}")
                                             translated.append({
                                                 'start': seg.start,
                                                 'end': seg.end,
@@ -559,10 +587,15 @@ if st.session_state.transcription_done and st.session_state.segments:
         target_lang = "en"
         source_name = "日本語"
         target_name = "英語"
-    else:
+    elif detected_lang == "en":
         target_lang = "ja"
         source_name = "英語"
         target_name = "日本語"
+    else:
+        # その他の言語は英語に翻訳
+        target_lang = "en"
+        source_name = detected_lang.upper()
+        target_name = "英語"
     
     st.info(f"🔍 検出された言語: {source_name} → 翻訳先: {target_name}")
     
@@ -582,6 +615,11 @@ if st.session_state.transcription_done and st.session_state.segments:
             try:
                 # 翻訳実行
                 translated_text = translator.translate(text)
+                
+                # 翻訳結果が空でないか確認
+                if not translated_text or translated_text.strip() == "":
+                    translated_text = text
+                
                 translated.append({
                     'start': seg.start,
                     'end': seg.end,
@@ -590,13 +628,13 @@ if st.session_state.transcription_done and st.session_state.segments:
                 })
                 
                 progress_bar.progress((i + 1) / len(st.session_state.segments))
-                status_text.text(f"翻訳中: {i + 1}/{len(st.session_state.segments)}")
+                status_text.text(f"翻訳中: {i + 1}/{len(st.session_state.segments)} | {source_name}→{target_name}")
                 
                 # API制限を避けるため、少し待機
                 time.sleep(0.1)
                 
             except Exception as e:
-                st.warning(f"翻訳エラー（セグメント {i+1}）: {str(e)}")
+                st.warning(f"翻訳エラー（セグメント {i+1}）: {str(e)} | テキスト: {text[:50]}")
                 translated.append({
                     'start': seg.start,
                     'end': seg.end,
